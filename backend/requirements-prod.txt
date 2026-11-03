@@ -1,0 +1,4 @@
+-r requirements.txt
+# PostgreSQL driver — install when DATABASE_URL uses postgresql://
+# May need a version with wheels for your Python; adjust as needed.
+psycopg2-binary>=2.9.9

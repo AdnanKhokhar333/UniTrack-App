@@ -2,6 +2,7 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import get_jwt
 
 from app.models.bus import Bus
+from app.models.trip import Trip, TripStatus
 from app.utils.decorators import role_required
 from app.utils.extensions import db
 
@@ -76,9 +77,32 @@ def update_bus(bus_id: int):
 @buses_bp.delete("/<int:bus_id>")
 @role_required("admin")
 def delete_bus(bus_id: int):
+    """Soft-deactivate a bus. Blocked if assigned to a driver or on an active trip."""
     bus = Bus.query.get(bus_id)
     if not bus:
         return jsonify({"error": "Bus not found"}), 404
+
+    if bus.driver_profile is not None:
+        return jsonify(
+            {
+                "error": (
+                    "Bus is assigned to a driver or has an active trip — "
+                    "unassign/end trip first"
+                )
+            }
+        ), 409
+
+    active_trip = Trip.query.filter_by(bus_id=bus.id, status=TripStatus.ACTIVE).first()
+    if active_trip:
+        return jsonify(
+            {
+                "error": (
+                    "Bus is assigned to a driver or has an active trip — "
+                    "unassign/end trip first"
+                )
+            }
+        ), 409
+
     bus.is_active = False
     db.session.commit()
     return jsonify({"message": "Bus deactivated", "bus": bus.to_dict()}), 200

@@ -1,7 +1,8 @@
 import { FormEvent, useEffect, useState } from "react";
-import { createBus, listBuses, updateBus } from "../api/buses";
+import { createBus, deleteBus, listBuses, updateBus } from "../api/buses";
 import { getErrorMessage } from "../api/client";
 import type { Bus } from "../api/types";
+import ConfirmDialog from "../components/ConfirmDialog";
 
 const emptyForm = {
   bus_number: "",
@@ -17,6 +18,8 @@ export default function BusesPage() {
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Bus | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   async function refresh() {
     setLoading(true);
@@ -74,14 +77,36 @@ export default function BusesPage() {
     }
   }
 
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteBus(pendingDelete.id);
+      setPendingDelete(null);
+      if (editingId === pendingDelete.id) resetForm();
+      await refresh();
+    } catch (err) {
+      setError(getErrorMessage(err));
+      setPendingDelete(null);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   return (
     <div>
-      <h1>Buses</h1>
-      <p className="muted">Manage fleet vehicles.</p>
+      <div className="page-header">
+        <h1>Bus Fleet Management</h1>
+        <p className="muted">
+          Register university buses, manage seating capacity, and update active
+          status.
+        </p>
+      </div>
 
       {error && <p className="error">{error}</p>}
 
-      <form className="panel-form" onSubmit={onSubmit}>
+      <form className="panel-form" onSubmit={onSubmit} autoComplete="off">
         <h2>{editingId != null ? "Edit bus" : "Create bus"}</h2>
         <div className="form-grid">
           <label>
@@ -91,6 +116,7 @@ export default function BusesPage() {
               onChange={(e) =>
                 setForm((f) => ({ ...f, bus_number: e.target.value }))
               }
+              placeholder="e.g. B-03"
               required
             />
           </label>
@@ -101,6 +127,7 @@ export default function BusesPage() {
               onChange={(e) =>
                 setForm((f) => ({ ...f, registration: e.target.value }))
               }
+              placeholder="e.g. RIS-4521"
               required
             />
           </label>
@@ -113,6 +140,7 @@ export default function BusesPage() {
               onChange={(e) =>
                 setForm((f) => ({ ...f, capacity: Number(e.target.value) }))
               }
+              placeholder="40"
               required
             />
           </label>
@@ -128,7 +156,7 @@ export default function BusesPage() {
           </label>
         </div>
         <div className="form-actions">
-          <button type="submit" disabled={saving}>
+          <button type="submit" className="primary-cta" disabled={saving}>
             {saving
               ? "Saving…"
               : editingId != null
@@ -147,6 +175,10 @@ export default function BusesPage() {
         <p className="muted">Loading…</p>
       ) : (
         <div className="table-wrap">
+          <div className="table-toolbar">
+            <h2 className="table-title">Fleet</h2>
+            <span className="count-badge">{buses.length} Total Buses</span>
+          </div>
           <table>
             <thead>
               <tr>
@@ -154,7 +186,7 @@ export default function BusesPage() {
                 <th>Registration</th>
                 <th>Capacity</th>
                 <th>Status</th>
-                <th />
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -169,16 +201,41 @@ export default function BusesPage() {
                 <tr key={bus.id}>
                   <td>{bus.bus_number}</td>
                   <td>{bus.registration}</td>
-                  <td>{bus.capacity}</td>
-                  <td>{bus.is_active ? "Active" : "Inactive"}</td>
+                  <td>{bus.capacity} seats</td>
                   <td>
-                    <button
-                      type="button"
-                      className="ghost small-btn"
-                      onClick={() => startEdit(bus)}
+                    <span
+                      className={
+                        bus.is_active
+                          ? "status-pill status-pill--active"
+                          : "status-pill status-pill--inactive"
+                      }
                     >
-                      Edit
-                    </button>
+                      {bus.is_active ? "• Active" : "• Inactive"}
+                    </span>
+                  </td>
+                  <td>
+                    <div className="row-actions">
+                      <button
+                        type="button"
+                        className="ghost small-btn"
+                        onClick={() => startEdit(bus)}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        className="danger-outline small-btn"
+                        onClick={() => setPendingDelete(bus)}
+                        disabled={!bus.is_active}
+                        title={
+                          bus.is_active
+                            ? "Deactivate bus"
+                            : "Already inactive"
+                        }
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -186,6 +243,16 @@ export default function BusesPage() {
           </table>
         </div>
       )}
+
+      <ConfirmDialog
+        open={pendingDelete != null}
+        title="Delete bus"
+        message="Are you sure you want to delete this bus?"
+        confirmLabel="Delete"
+        busy={deleting}
+        onConfirm={confirmDelete}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   );
 }

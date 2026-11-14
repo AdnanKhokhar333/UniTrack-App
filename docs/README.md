@@ -6,12 +6,12 @@ Single-university Transport & Travel Tracking System (FYP). Schema and APIs are 
 
 | Layer | Tech |
 |--------|------|
-| Mobile | React Native + Expo + TypeScript, React Navigation, Axios, AsyncStorage, expo-location, react-native-maps, expo-notifications, expo-av |
-| Admin | `/admin-web` — React + Vite + TypeScript (web only) |
-| API | Python Flask REST, JWT, Flask-SocketIO (live location later) |
-| DB | SQLAlchemy — SQLite (dev); PostgreSQL via `DATABASE_URL` + `requirements-prod.txt` |
+| Mobile | React Native + Expo + TypeScript, React Navigation, Axios, AsyncStorage, expo-location, react-native-maps, expo-notifications, expo-av, react-native-qrcode-svg |
+| Admin | `/admin-web` — React + Vite + TypeScript; Leaflet/OSM live fleet map |
+| API | Python Flask REST, JWT, Flask-SocketIO live broadcast (`async_mode=threading`) |
+| DB | SQLAlchemy — SQLite (dev default); PostgreSQL via `DATABASE_URL` + `requirements-prod.txt` |
 
-SocketIO uses `async_mode=threading` (compatible with current Windows/Python; live events come later).
+Live location: drivers still **POST** GPS over REST; the server **broadcasts** `trip_location` over Socket.IO. Admin Live Map and Student map subscribe while focused; **HTTP polling remains the fallback** if the socket disconnects.
 
 ## Roles
 
@@ -30,8 +30,8 @@ SocketIO uses `async_mode=threading` (compatible with current Windows/Python; li
 
 ```
 /backend      Flask API, models, JWT auth, core REST
-/admin-web    Admin dashboard (fleet, drivers, routes, students, SOS)
-/mobile       Expo app — DriverNavigator + StudentNavigator
+/admin-web    Admin dashboard (fleet, live map, students, ratings, SOS, fuel…)
+/mobile       Expo app — DriverNavigator + StudentNavigator (pass + feedback)
 /docs         This document
 ```
 
@@ -81,15 +81,56 @@ SocketIO uses `async_mode=threading` (compatible with current Windows/Python; li
 - **Proximity alerts:** Local notifications fire while the student screen is focused (and after push-token registration). True OS geofencing / background approach while the app is killed is constrained on Expo Go — remote push from the server is a Phase 5+ upgrade if tokens are stored.
 - **Missed-bus sound:** Plays a remote alert tone via `expo-av` (needs network once); modal still shows if audio fails.
 
-## Phase 5 — next (not built yet)
+## Phase 5 — Pass, feedback, admin ops (done)
 
-- QR digital pass
-- Driver ratings / complaints UI
-- Full admin live multi-bus fleet map polish
-- Fuel / maintenance estimates
-- CSV bulk student upload
-- SocketIO live broadcast (Phase 3–4 use polling + local notifications)
-- PostgreSQL production deploy
+- [x] Digital QR bus pass: `GET /api/students/me/pass` (HMAC token + today `valid_date`); student **Bus Pass** screen (`react-native-qrcode-svg`)
+- [x] Pass revoke: admin **Revoke pass** → `POST /api/users/students/:user_id/revoke` sets `is_approved=false` (pass endpoint then returns 403)
+- [x] Ratings: `POST /api/ratings` (student), `GET /api/ratings` (admin list + averages); student Feedback screen
+- [x] Complaints: `POST /api/complaints`, `GET /api/complaints`, `PATCH …/resolve`; admin Complaints page
+- [x] Admin **Live Map**: Leaflet + OSM; Socket.IO `trip_location` + poll fallback on `GET /api/trips/active` ~6s (optional `VITE_GOOGLE_MAPS_API_KEY` documented if switching later)
+- [x] Admin **Speeding** page (`GET /api/alerts/speeding`); Dashboard attendance summary (`GET /api/attendance/summary`)
+- [x] CSV bulk student upload: `POST /api/users/students/bulk` (multipart CSV or JSON)
+- [x] Fuel / maintenance: `BusMaintenanceLog` + `GET /api/maintenance/buses` estimates; admin Fuel/Maint. page
+
+### Fuel estimate formula (FYP / pragmatic)
+
+```
+distance_km     = sum of Haversine segments between consecutive TripLocation points (per bus trips)
+estimated_liters = distance_km / FUEL_KM_PER_LITER   # default 8.0 from .env
+```
+
+Admins may also enter `liters_added` + free-text notes (no IoT sensors).
+
+### Phase 5 stretch (done)
+
+- [x] **SocketIO live broadcast** on successful `POST /api/trips/:id/location` → event `trip_location` to rooms `route:{id}` + `university:{id}`; JWT handshake + `join`; admin-web + student map listen; poll fallback when socket down
+- [x] **PostgreSQL production path:** `DATABASE_URL` (incl. `postgres://` normalize), `requirements-prod.txt` (`psycopg2-binary`), optional `backend/docker-compose.postgres.yml`, docs in `backend/README.md`. SQLite remains default local/dev; no forced data migration
+
+#### Socket.IO contract
+
+| Item | Value |
+|------|--------|
+| Auth | Handshake `auth: { token: "<JWT>" }` (same access token as REST). Rejected if missing/invalid. |
+| Join (admin) | Client emits `join` → `{ room: "university" }` → room `university:{university_id}` from JWT |
+| Join (student) | Client emits `join` → `{ room: "route", route_id: N }` — only if `N` is their `active_route_id` |
+| Event | `trip_location` |
+| Payload | `{ trip_id, route_id, bus_id, latitude, longitude, speed_kmh, recorded_at }` |
+| Driver | No socket listen — REST POST only; server broadcasts |
+| Async mode | `threading` (Windows-friendly; do not switch to eventlet/gevent unless tested) |
+
+Dev proxy: admin-web Vite proxies `/socket.io` → Flask when `VITE_API_URL` is empty.
+
+#### PostgreSQL enable (summary)
+
+```bash
+cd backend
+docker compose -f docker-compose.postgres.yml up -d   # optional
+# .env: DATABASE_URL=postgresql://unitrack:unitrack@localhost:5432/unitrack
+pip install -r requirements-prod.txt
+python run.py   # create_all + seed on first boot
+```
+
+Full notes: `backend/README.md`.
 
 ## Run (dev)
 
@@ -142,7 +183,7 @@ Wiring (already in `mobile/app.config.js`): `ios.config.googleMapsApiKey`, `andr
 
 Default seed admin: see `ADMIN_EMAIL` / `ADMIN_PASSWORD` in `.env.example`.
 
-## End-to-end test (Phase 4)
+## End-to-end test (Phase 4 — still valid)
 
 1. Start backend + admin-web. Log in as admin.
 2. Ensure **Bus**, **Driver** (with bus), **Route** (2+ stops with real lat/lng), and **Student** (approved, assigned route + stop) exist.
@@ -157,6 +198,39 @@ Default seed admin: see `ADMIN_EMAIL` / `ADMIN_PASSWORD` in `.env.example`.
 
 Parents use the same student credentials (Student Mode).
 
+## End-to-end test (Phase 5)
+
+1. **Bus Pass:** Student → **Bus Pass** → QR + name + student number + today’s date. Admin → Students → **Revoke pass** → student refresh fails with revoked/403; **Approve** again to restore.
+2. **Rating:** After (or during) a trip on the student’s route → **Rate / Complaint** → pick stars → submit → Admin **Ratings** shows row + driver average.
+3. **Complaint:** Student sends subject/body → Admin **Complaints** → **Resolve**.
+4. **Live Map:** With an active driver trip posting GPS → Admin **Live Map** shows a marker that moves via Socket.IO (`live (socket)` in the status line) or ~6s poll fallback.
+5. **Speeding:** Trigger speed &gt; threshold → Admin **Speeding** table shows the log.
+6. **Dashboard:** Confirm taking/absent/marked counts for today.
+7. **CSV:** Upload a CSV with header `email,password,full_name,student_number` (+ optional phone/route/stop) → success/error counts; duplicate email/number reported.
+8. **Fuel / Maint.:** Drive a trip with several location points → Admin **Fuel / Maint.** shows non-zero distance_km / estimated liters; add a note + optional liters.
+
+## Stretch smoke tests
+
+### A) Socket.IO live broadcast
+
+1. Start backend with `python run.py` (must use `socketio.run`, not bare Flask).
+2. Admin-web → **Live Map** — status should show **live (socket)** after connect (JWT join to `university:{id}`).
+3. Student mobile → Home (map focused, assigned route) — app joins `route:{id}`.
+4. Driver → Start Trip → allow GPS → posts to `/api/trips/:id/location`.
+5. Confirm admin marker and student bus pin move **sooner than the poll interval** (sub-second to a few seconds after each POST).
+6. Kill/block the socket (stop backend briefly, or DevTools offline) → status falls back to **polling** / markers still update on the HTTP interval.
+7. Optional: browser console / React Native debugger — listen for event name `trip_location`.
+
+### B) PostgreSQL (if Docker/Postgres available)
+
+1. `cd backend && docker compose -f docker-compose.postgres.yml up -d`
+2. Set `DATABASE_URL=postgresql://unitrack:unitrack@localhost:5432/unitrack` in `.env`
+3. `pip install -r requirements-prod.txt` then `python run.py`
+4. `GET /api/health` OK; log in as seeded admin; create a bus (proves enums/constraints on Postgres).
+5. Revert to `sqlite:///unitrack.db` anytime for local demos — no data is auto-migrated between engines.
+
+If Postgres is not installed on the machine, the enable summary under Phase 5 stretch plus config review is enough; do not block demos on SQLite.
+
 ## Core API
 
 | Method | Path | Who |
@@ -164,16 +238,20 @@ Parents use the same student credentials (Student Mode).
 | POST | `/api/auth/login` | all |
 | GET | `/api/auth/me` | JWT |
 | POST | `/api/users/students` | admin |
+| POST | `/api/users/students/bulk` | admin |
 | POST | `/api/users/students/:id/approve` | admin |
+| POST | `/api/users/students/:id/revoke` | admin |
 | PATCH | `/api/users/students/:id/route` | admin |
 | GET | `/api/users/students` | admin |
 | POST | `/api/users/drivers` | admin |
 | GET | `/api/users/drivers` | admin |
 | POST | `/api/users/me/push-token` | JWT |
+| GET | `/api/students/me/pass` | student |
 | CRUD | `/api/buses` | admin |
 | CRUD | `/api/routes` (+ stops) | admin |
 | POST | `/api/attendance` | student |
 | GET | `/api/attendance/today` | student |
+| GET | `/api/attendance/summary` | admin |
 | GET | `/api/attendance/route/:id` | admin/driver |
 | POST | `/api/trips/start` | driver |
 | POST | `/api/trips/:id/end` | driver |
@@ -187,3 +265,10 @@ Parents use the same student credentials (Student Mode).
 | GET | `/api/alerts/sos` | admin |
 | PATCH | `/api/alerts/sos/:id/resolve` | admin |
 | GET | `/api/alerts/speeding` | admin |
+| POST | `/api/ratings` | student |
+| GET | `/api/ratings` | admin |
+| POST | `/api/complaints` | student |
+| GET | `/api/complaints` | admin |
+| PATCH | `/api/complaints/:id/resolve` | admin |
+| GET | `/api/maintenance/buses` | admin |
+| GET/POST | `/api/maintenance/logs` | admin |

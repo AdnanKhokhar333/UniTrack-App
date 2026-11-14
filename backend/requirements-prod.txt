@@ -1,4 +1,4 @@
 -r requirements.txt
-# PostgreSQL driver — install when DATABASE_URL uses postgresql://
-# May need a version with wheels for your Python; adjust as needed.
-psycopg2-binary>=2.9.9
+# Production extras — install when DATABASE_URL uses postgresql:// (or postgres://)
+# psycopg2-binary provides wheels for most Windows/macOS/Linux Python builds.
+psycopg2-binary>=2.9.9,<3

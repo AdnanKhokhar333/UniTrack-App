@@ -4,5 +4,5 @@ from app.utils.extensions import socketio
 app = create_app()
 
 if __name__ == "__main__":
-    # SocketIO wraps the Flask app for future live location events
+    # threading async_mode (Windows-friendly); broadcasts trip_location on location POST
     socketio.run(app, host="0.0.0.0", port=5000, debug=True, allow_unsafe_werkzeug=True)

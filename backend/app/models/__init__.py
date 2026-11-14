@@ -3,6 +3,7 @@ from app.models.attendance import Attendance
 from app.models.bus import Bus
 from app.models.complaint import Complaint
 from app.models.driver import DriverProfile
+from app.models.maintenance import BusMaintenanceLog
 from app.models.rating import DriverRating
 from app.models.route import Route, Stop
 from app.models.speeding import SpeedingLog
@@ -30,4 +31,5 @@ __all__ = [
     "SosAlert",
     "SosStatus",
     "DeviceToken",
+    "BusMaintenanceLog",
 ]

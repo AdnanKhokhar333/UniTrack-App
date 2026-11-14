@@ -66,6 +66,23 @@ def my_today():
     return jsonify({"attendance": record.to_dict() if record else None}), 200
 
 
+@attendance_bp.get("/summary")
+@role_required("admin")
+def attendance_summary_today():
+    """University-wide today counts for admin dashboard."""
+    records = Attendance.query.filter_by(attendance_date=date.today()).all()
+    taking = sum(1 for r in records if r.status == AttendanceStatus.TAKING)
+    absent = sum(1 for r in records if r.status == AttendanceStatus.ABSENT)
+    return jsonify(
+        {
+            "date": date.today().isoformat(),
+            "taking_count": taking,
+            "absent_count": absent,
+            "total_marked": len(records),
+        }
+    ), 200
+
+
 @attendance_bp.get("/route/<int:route_id>")
 @role_required("admin", "driver")
 def route_attendance_today(route_id: int):
@@ -73,6 +90,7 @@ def route_attendance_today(route_id: int):
     records = Attendance.query.filter_by(
         route_id=route_id, attendance_date=date.today()
     ).all()
+
 
     taking = [r.to_dict() for r in records if r.status == AttendanceStatus.TAKING]
     absent = [r.to_dict() for r in records if r.status == AttendanceStatus.ABSENT]

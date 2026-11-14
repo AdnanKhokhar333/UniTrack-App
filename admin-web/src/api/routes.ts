@@ -42,3 +42,8 @@ export async function addStop(
   );
   return data.stop;
 }
+
+export async function deleteRoute(routeId: number): Promise<Route> {
+  const { data } = await api.delete<{ route: Route }>(`/api/routes/${routeId}`);
+  return data.route;
+}

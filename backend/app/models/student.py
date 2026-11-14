@@ -45,4 +45,5 @@ class StudentProfile(db.Model):
             "stop_id": self.stop_id,
             "email": self.user.email if self.user else None,
             "is_approved": self.user.is_approved if self.user else False,
+            "is_active": self.user.is_active if self.user else True,
         }

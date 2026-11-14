@@ -1,7 +1,13 @@
 import { FormEvent, useEffect, useState } from "react";
 import { getErrorMessage } from "../api/client";
-import { createRoute, listRoutes, updateRoute } from "../api/routes";
+import {
+  createRoute,
+  deleteRoute,
+  listRoutes,
+  updateRoute,
+} from "../api/routes";
 import type { Route, StopInput } from "../api/types";
+import ConfirmDialog from "../components/ConfirmDialog";
 
 type StopDraft = {
   name: string;
@@ -25,6 +31,8 @@ export default function RoutesPage() {
   const [description, setDescription] = useState("");
   const [isActive, setIsActive] = useState(true);
   const [stops, setStops] = useState<StopDraft[]>([emptyStop()]);
+  const [pendingDelete, setPendingDelete] = useState<Route | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   async function refresh() {
     setLoading(true);
@@ -137,6 +145,23 @@ export default function RoutesPage() {
     }
   }
 
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteRoute(pendingDelete.id);
+      setPendingDelete(null);
+      if (editingId === pendingDelete.id) resetForm();
+      await refresh();
+    } catch (err) {
+      setError(getErrorMessage(err));
+      setPendingDelete(null);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   function stopFlow(route: Route) {
     const ordered = [...(route.stops ?? [])].sort(
       (a, b) => a.sequence_order - b.sequence_order
@@ -147,19 +172,25 @@ export default function RoutesPage() {
 
   return (
     <div>
-      <h1>Routes</h1>
-      <p className="muted">Define routes and ordered stops.</p>
+      <div className="page-header">
+        <h1>Routes</h1>
+        <p className="muted">
+          Plan campus shuttle paths and keep stop order clear for drivers and
+          students.
+        </p>
+      </div>
 
       {error && <p className="error">{error}</p>}
 
-      <form className="panel-form" onSubmit={onSubmit}>
+      <form className="panel-form" onSubmit={onSubmit} autoComplete="off">
         <h2>{editingId != null ? "Edit route" : "Create route"}</h2>
         <div className="form-grid">
           <label>
-            Name
+            Route name
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Taxila Express"
               required
             />
           </label>
@@ -168,6 +199,7 @@ export default function RoutesPage() {
             <input
               value={description}
               onChange={(e) => setDescription(e.target.value)}
+              placeholder="Optional notes for this route"
             />
           </label>
           <label className="checkbox-label">
@@ -191,11 +223,14 @@ export default function RoutesPage() {
             <div key={index} className="stop-row">
               <span className="stop-badge">Stop {index + 1}</span>
               <label>
-                Name
+                Stop name
                 <input
                   value={stop.name}
                   onChange={(e) => updateStop(index, { name: e.target.value })}
-                  required={index === 0 || Boolean(stop.latitude || stop.longitude)}
+                  placeholder="e.g. Main Gate"
+                  required={
+                    index === 0 || Boolean(stop.latitude || stop.longitude)
+                  }
                 />
               </label>
               <label>
@@ -207,6 +242,7 @@ export default function RoutesPage() {
                   onChange={(e) =>
                     updateStop(index, { latitude: e.target.value })
                   }
+                  placeholder="33.7715"
                   required={Boolean(stop.name.trim())}
                 />
               </label>
@@ -219,6 +255,7 @@ export default function RoutesPage() {
                   onChange={(e) =>
                     updateStop(index, { longitude: e.target.value })
                   }
+                  placeholder="72.7511"
                   required={Boolean(stop.name.trim())}
                 />
               </label>
@@ -253,7 +290,7 @@ export default function RoutesPage() {
         </div>
 
         <div className="form-actions">
-          <button type="submit" disabled={saving}>
+          <button type="submit" className="primary-cta" disabled={saving}>
             {saving
               ? "Saving…"
               : editingId != null
@@ -272,6 +309,10 @@ export default function RoutesPage() {
         <p className="muted">Loading…</p>
       ) : (
         <div className="table-wrap">
+          <div className="table-toolbar">
+            <h2 className="table-title">Routes</h2>
+            <span className="count-badge">{routes.length} Total Routes</span>
+          </div>
           <table>
             <thead>
               <tr>
@@ -279,7 +320,7 @@ export default function RoutesPage() {
                 <th>Description</th>
                 <th>Stops</th>
                 <th>Status</th>
-                <th />
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -295,15 +336,40 @@ export default function RoutesPage() {
                   <td>{route.name}</td>
                   <td>{route.description || "—"}</td>
                   <td className="stop-flow">{stopFlow(route)}</td>
-                  <td>{route.is_active ? "Active" : "Inactive"}</td>
                   <td>
-                    <button
-                      type="button"
-                      className="ghost small-btn"
-                      onClick={() => startEdit(route)}
+                    <span
+                      className={
+                        route.is_active
+                          ? "status-pill status-pill--active"
+                          : "status-pill status-pill--inactive"
+                      }
                     >
-                      Edit
-                    </button>
+                      {route.is_active ? "• Active" : "• Inactive"}
+                    </span>
+                  </td>
+                  <td>
+                    <div className="row-actions">
+                      <button
+                        type="button"
+                        className="ghost small-btn"
+                        onClick={() => startEdit(route)}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        className="danger-outline small-btn"
+                        onClick={() => setPendingDelete(route)}
+                        disabled={!route.is_active}
+                        title={
+                          route.is_active
+                            ? "Deactivate route"
+                            : "Already inactive"
+                        }
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -311,6 +377,16 @@ export default function RoutesPage() {
           </table>
         </div>
       )}
+
+      <ConfirmDialog
+        open={pendingDelete != null}
+        title="Delete route"
+        message="Are you sure you want to delete this route?"
+        confirmLabel="Delete"
+        busy={deleting}
+        onConfirm={confirmDelete}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   );
 }

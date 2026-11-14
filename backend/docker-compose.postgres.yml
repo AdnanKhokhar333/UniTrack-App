@@ -1,0 +1,30 @@
+# Optional local PostgreSQL for UniTrack (production-path smoke test).
+# Usage:
+#   docker compose -f docker-compose.postgres.yml up -d
+# Then in backend/.env:
+#   DATABASE_URL=postgresql://unitrack:unitrack@localhost:5432/unitrack
+#   pip install -r requirements-prod.txt
+#   python run.py
+#
+# SQLite remains the default for day-to-day local/FYP work — this file is optional.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: unitrack-postgres
+    environment:
+      POSTGRES_USER: unitrack
+      POSTGRES_PASSWORD: unitrack
+      POSTGRES_DB: unitrack
+    ports:
+      - "5432:5432"
+    volumes:
+      - unitrack_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U unitrack -d unitrack"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  unitrack_pgdata:

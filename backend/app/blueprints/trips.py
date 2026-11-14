@@ -6,6 +6,7 @@ from flask_jwt_extended import get_jwt_identity
 from app.models.speeding import SpeedingLog
 from app.models.trip import Trip, TripLocation, TripStatus
 from app.models.user import User
+from app.sockets.live import broadcast_trip_location
 from app.utils.decorators import role_required
 from app.utils.extensions import db
 
@@ -108,6 +109,20 @@ def post_location(trip_id: int):
         speeding_logged = True
 
     db.session.commit()
+
+    university_id = trip.bus.university_id if trip.bus else None
+    if university_id is not None:
+        broadcast_trip_location(
+            university_id=university_id,
+            trip_id=trip.id,
+            route_id=trip.route_id,
+            bus_id=trip.bus_id,
+            latitude=loc.latitude,
+            longitude=loc.longitude,
+            speed_kmh=loc.speed_kmh,
+            recorded_at=loc.recorded_at.isoformat() if loc.recorded_at else None,
+        )
+
     return jsonify(
         {
             "location": loc.to_dict(),

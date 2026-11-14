@@ -12,6 +12,7 @@ import {
 import MapView, { Marker, type Region } from "react-native-maps";
 import * as Location from "expo-location";
 import { Audio } from "expo-av";
+import { Ionicons } from "@expo/vector-icons";
 import { useIsFocused } from "@react-navigation/native";
 import { useAuth } from "../../auth/AuthContext";
 import {
@@ -52,6 +53,7 @@ import {
   flushLocationQueue,
 } from "../../utils/locationQueue";
 import { setupPushNotifications } from "../../utils/notifications";
+import { colors, radius } from "../../theme";
 
 const LOCATION_INTERVAL_MS = 7000;
 const MISSED_POLL_MS = 5000;
@@ -70,6 +72,16 @@ function apiError(e: unknown, fallback: string): string {
     (e as { message?: string })?.message ||
     fallback
   );
+}
+
+/** Proper Title Case for driver display names (e.g. rizwan khokhar → Rizwan Khokhar). */
+function toTitleCase(value: string): string {
+  return value
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
 }
 
 function regionFromPoints(
@@ -192,7 +204,7 @@ export default function DriverHomeScreen() {
     bootstrap();
   }, [bootstrap]);
 
-  // Foreground GPS + offline queue while trip is active
+  // Foreground GPS + offline flush while trip is active
   useEffect(() => {
     if (!trip || trip.status !== "active") {
       setSpeeding(false);
@@ -433,6 +445,17 @@ export default function DriverHomeScreen() {
   }-${mapFitCoords.length}`;
   const previewFocusKey = `preview-${selectedRouteId ?? "none"}-${mapFitCoords.length}`;
 
+  const displayName = useMemo(() => {
+    const raw = driverProfile?.full_name?.trim() || user?.email || "Driver";
+    if (raw.includes("@")) return raw;
+    return toTitleCase(raw);
+  }, [driverProfile?.full_name, user?.email]);
+
+  const takingStudents = attendance?.taking ?? [];
+  const absentStudents = attendance?.absent ?? [];
+  const hasAttendanceMarks =
+    (attendance?.taking_count ?? 0) > 0 || (attendance?.absent_count ?? 0) > 0;
+
   async function onStartTrip() {
     if (!selectedRouteId) {
       setError("Select a route first");
@@ -539,7 +562,7 @@ export default function DriverHomeScreen() {
   if (loading) {
     return (
       <View style={[styles.container, styles.center]}>
-        <ActivityIndicator size="large" color="#38bdf8" />
+        <ActivityIndicator size="large" color={colors.ctaIndigoMid} />
       </View>
     );
   }
@@ -554,17 +577,55 @@ export default function DriverHomeScreen() {
       scrollEnabled={!mapGesturing}
       keyboardShouldPersistTaps="handled"
     >
-      <Text style={styles.title}>Driver Mode</Text>
-      <Text style={styles.muted}>
-        {driverProfile?.full_name || user?.email}
-      </Text>
+      <View style={styles.headerRow}>
+        <Text style={styles.title}>Driver Ops</Text>
+        <View style={styles.headerActions}>
+          <View
+            style={[
+              styles.statusPill,
+              tripActive ? styles.statusPillLive : styles.statusPillReady,
+            ]}
+          >
+            <Text
+              style={[
+                styles.statusPillText,
+                tripActive
+                  ? styles.statusPillTextLive
+                  : styles.statusPillTextReady,
+              ]}
+            >
+              {tripActive ? "• Live Trip" : "• Ready"}
+            </Text>
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Log out"
+            hitSlop={8}
+            onPress={logout}
+            style={styles.logoutIconBtn}
+          >
+            <Ionicons
+              name="log-out-outline"
+              size={20}
+              color={colors.muted}
+            />
+          </Pressable>
+        </View>
+      </View>
+
+      <Text style={styles.driverName}>{displayName}</Text>
 
       <View style={styles.card}>
         <Text style={styles.cardLabel}>Assigned bus</Text>
         {bus ? (
-          <Text style={styles.cardValue}>
-            {bus.bus_number} · {bus.registration} · cap {bus.capacity}
-          </Text>
+          <View style={styles.busRow}>
+            <View style={styles.busIconBadge}>
+              <Ionicons name="bus" size={18} color={colors.onFilled} />
+            </View>
+            <Text style={styles.cardValue}>
+              {bus.bus_number} · {bus.registration} · {bus.capacity} Seats
+            </Text>
+          </View>
         ) : (
           <Text style={styles.warnText}>
             No bus assigned — ask admin to assign one before starting a trip.
@@ -625,17 +686,37 @@ export default function DriverHomeScreen() {
                   style={[styles.routeRow, selected && styles.routeRowSelected]}
                   onPress={() => setSelectedRouteId(r.id)}
                 >
-                  <Text
-                    style={[
-                      styles.routeName,
-                      selected && styles.routeNameSelected,
-                    ]}
-                  >
-                    {r.name}
-                  </Text>
-                  <Text style={styles.routeMeta}>
-                    {(r.stops?.length ?? 0)} stops
-                  </Text>
+                  <View style={styles.routeTextCol}>
+                    <Text
+                      style={[
+                        styles.routeName,
+                        selected && styles.routeNameSelected,
+                      ]}
+                    >
+                      {r.name}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.routeMeta,
+                        selected && styles.routeMetaSelected,
+                      ]}
+                    >
+                      {(r.stops?.length ?? 0)} stops
+                    </Text>
+                  </View>
+                  {selected ? (
+                    <Ionicons
+                      name="checkmark-circle"
+                      size={22}
+                      color={colors.ctaIndigoMid}
+                    />
+                  ) : (
+                    <Ionicons
+                      name="ellipse-outline"
+                      size={22}
+                      color={colors.border}
+                    />
+                  )}
                 </Pressable>
               );
             })
@@ -649,60 +730,70 @@ export default function DriverHomeScreen() {
                 </Text>
               </View>
             ) : (
-              <View style={styles.mapHostPreview} collapsable={false}>
-                <SafeMapView
-                  wrapStyle={styles.mapWrapPreview}
-                  focusRegion={regionFromPoints(mapStops)}
-                  fitCoordinates={mapStops
-                    .filter((s) => isValidCoord(s.latitude, s.longitude))
-                    .map((s) => ({
-                      latitude: s.latitude,
-                      longitude: s.longitude,
-                    }))}
-                  focusKey={previewFocusKey}
-                  scrollEnabled
-                  zoomEnabled
-                  pitchEnabled={false}
-                  rotateEnabled={false}
-                  moveOnMarkerPress={false}
-                  onMapGestureActive={setMapGesturing}
-                >
-                  {mapStops
-                    .filter((s) => isValidCoord(s.latitude, s.longitude))
-                    .map((s) => (
-                      <Marker
-                        key={`preview-${s.id}`}
-                        coordinate={{
-                          latitude: s.latitude,
-                          longitude: s.longitude,
-                        }}
-                        title={s.name}
-                        pinColor="#94a3b8"
-                      />
-                    ))}
-                </SafeMapView>
-                {mapStops.every(
-                  (s) => !isValidCoord(s.latitude, s.longitude)
-                ) ? (
-                  <View style={styles.mapOverlay} pointerEvents="none">
-                    <Text style={styles.mapOverlayText}>
-                      No valid stop coordinates — showing default region.
-                    </Text>
-                  </View>
-                ) : null}
-              </View>
+              <>
+                <Text style={styles.mapSectionLabel}>Route stops preview</Text>
+                <View style={styles.mapHostPreview} collapsable={false}>
+                  <SafeMapView
+                    wrapStyle={styles.mapWrapPreview}
+                    focusRegion={regionFromPoints(mapStops)}
+                    fitCoordinates={mapStops
+                      .filter((s) => isValidCoord(s.latitude, s.longitude))
+                      .map((s) => ({
+                        latitude: s.latitude,
+                        longitude: s.longitude,
+                      }))}
+                    focusKey={previewFocusKey}
+                    scrollEnabled
+                    zoomEnabled
+                    pitchEnabled={false}
+                    rotateEnabled={false}
+                    moveOnMarkerPress={false}
+                    onMapGestureActive={setMapGesturing}
+                  >
+                    {mapStops
+                      .filter((s) => isValidCoord(s.latitude, s.longitude))
+                      .map((s) => (
+                        <Marker
+                          key={`preview-${s.id}`}
+                          coordinate={{
+                            latitude: s.latitude,
+                            longitude: s.longitude,
+                          }}
+                          title={s.name}
+                          pinColor={colors.ctaIndigoMid}
+                        />
+                      ))}
+                  </SafeMapView>
+                  {mapStops.every(
+                    (s) => !isValidCoord(s.latitude, s.longitude)
+                  ) ? (
+                    <View style={styles.mapOverlay} pointerEvents="none">
+                      <Text style={styles.mapOverlayText}>
+                        No valid stop coordinates — showing default region.
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+              </>
             )
           ) : null}
 
           <Pressable
-            style={[styles.primaryBtn, busy && styles.btnDisabled]}
+            style={[styles.startBtn, busy && styles.btnDisabled]}
             onPress={onStartTrip}
             disabled={busy || !selectedRouteId || !driverProfile?.bus_id}
           >
             {busy ? (
-              <ActivityIndicator color="#0f172a" />
+              <ActivityIndicator color={colors.onFilled} />
             ) : (
-              <Text style={styles.primaryBtnText}>Start Trip</Text>
+              <View style={styles.btnContent}>
+                <Ionicons
+                  name="navigate"
+                  size={18}
+                  color={colors.onFilled}
+                />
+                <Text style={styles.startBtnText}>Start Trip</Text>
+              </View>
             )}
           </Pressable>
         </View>
@@ -735,65 +826,68 @@ export default function DriverHomeScreen() {
               </Text>
             </View>
           ) : (
-            <View style={styles.mapHost} collapsable={false}>
-              <SafeMapView
-                ref={mapRef}
-                wrapStyle={styles.mapWrap}
-                focusRegion={mapRegion}
-                fitCoordinates={mapFitCoords}
-                focusKey={mapFocusKey}
-                scrollEnabled
-                zoomEnabled
-                pitchEnabled={false}
-                rotateEnabled={false}
-                moveOnMarkerPress={false}
-                onMapGestureActive={setMapGesturing}
-              >
-                {mapStops
-                  .filter((s) => isValidCoord(s.latitude, s.longitude))
-                  .map((s) => (
+            <>
+              <Text style={styles.mapSectionLabel}>Route stops preview</Text>
+              <View style={styles.mapHost} collapsable={false}>
+                <SafeMapView
+                  ref={mapRef}
+                  wrapStyle={styles.mapWrap}
+                  focusRegion={mapRegion}
+                  fitCoordinates={mapFitCoords}
+                  focusKey={mapFocusKey}
+                  scrollEnabled
+                  zoomEnabled
+                  pitchEnabled={false}
+                  rotateEnabled={false}
+                  moveOnMarkerPress={false}
+                  onMapGestureActive={setMapGesturing}
+                >
+                  {mapStops
+                    .filter((s) => isValidCoord(s.latitude, s.longitude))
+                    .map((s) => (
+                      <Marker
+                        key={`stop-${s.id}`}
+                        coordinate={{
+                          latitude: s.latitude,
+                          longitude: s.longitude,
+                        }}
+                        title={s.name}
+                        description={`Stop ${s.sequence_order}`}
+                        pinColor={colors.ctaIndigoMid}
+                      />
+                    ))}
+                  {hasDriverGps ? (
                     <Marker
-                      key={`stop-${s.id}`}
                       coordinate={{
-                        latitude: s.latitude,
-                        longitude: s.longitude,
+                        latitude: driverLat!,
+                        longitude: driverLng!,
                       }}
-                      title={s.name}
-                      description={`Stop ${s.sequence_order}`}
-                      pinColor="#94a3b8"
+                      title="You (bus)"
+                      description={
+                        lastSpeed != null
+                          ? `${lastSpeed.toFixed(0)} km/h`
+                          : "Current GPS"
+                      }
+                      pinColor={colors.success}
                     />
-                  ))}
-                {hasDriverGps ? (
-                  <Marker
-                    coordinate={{
-                      latitude: driverLat!,
-                      longitude: driverLng!,
-                    }}
-                    title="You (bus)"
-                    description={
-                      lastSpeed != null
-                        ? `${lastSpeed.toFixed(0)} km/h`
-                        : "Current GPS"
-                    }
-                    pinColor="#22c55e"
-                  />
+                  ) : null}
+                </SafeMapView>
+                {mapStops.every((s) => !isValidCoord(s.latitude, s.longitude)) &&
+                !hasDriverGps ? (
+                  <View style={styles.mapOverlay} pointerEvents="none">
+                    <Text style={styles.mapOverlayText}>
+                      Waiting for GPS / stop coordinates…
+                    </Text>
+                  </View>
+                ) : !hasDriverGps ? (
+                  <View style={styles.mapOverlay} pointerEvents="none">
+                    <Text style={styles.mapOverlayText}>
+                      Acquiring your GPS position…
+                    </Text>
+                  </View>
                 ) : null}
-              </SafeMapView>
-              {mapStops.every((s) => !isValidCoord(s.latitude, s.longitude)) &&
-              !hasDriverGps ? (
-                <View style={styles.mapOverlay} pointerEvents="none">
-                  <Text style={styles.mapOverlayText}>
-                    Waiting for GPS / stop coordinates…
-                  </Text>
-                </View>
-              ) : !hasDriverGps ? (
-                <View style={styles.mapOverlay} pointerEvents="none">
-                  <Text style={styles.mapOverlayText}>
-                    Acquiring your GPS position…
-                  </Text>
-                </View>
-              ) : null}
-            </View>
+              </View>
+            </>
           )}
 
           {missedAlerts.length > 0 ? (
@@ -820,21 +914,35 @@ export default function DriverHomeScreen() {
             disabled={sosBusy}
           >
             {sosBusy ? (
-              <ActivityIndicator color="#f8fafc" />
+              <ActivityIndicator color={colors.onFilled} />
             ) : (
-              <Text style={styles.sosBtnText}>SOS — EMERGENCY</Text>
+              <View style={styles.btnContent}>
+                <Ionicons
+                  name="warning"
+                  size={20}
+                  color={colors.onFilled}
+                />
+                <Text style={styles.sosBtnText}>SOS — EMERGENCY</Text>
+              </View>
             )}
           </Pressable>
 
           <Pressable
-            style={[styles.dangerBtn, busy && styles.btnDisabled]}
+            style={[styles.endBtn, busy && styles.btnDisabled]}
             onPress={onEndTrip}
             disabled={busy}
           >
             {busy ? (
-              <ActivityIndicator color="#f8fafc" />
+              <ActivityIndicator color={colors.onFilled} />
             ) : (
-              <Text style={styles.dangerBtnText}>End Trip</Text>
+              <View style={styles.btnContent}>
+                <Ionicons
+                  name="stop-circle-outline"
+                  size={18}
+                  color={colors.onFilled}
+                />
+                <Text style={styles.endBtnText}>End Trip</Text>
+              </View>
             )}
           </Pressable>
         </View>
@@ -843,50 +951,59 @@ export default function DriverHomeScreen() {
       {(tripActive || selectedRouteId) && attendance ? (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Today&apos;s attendance</Text>
-          <Text style={styles.muted}>
-            Taking {attendance.taking_count} · Absent {attendance.absent_count}
-          </Text>
-          {attendance.by_stop.length === 0 ? (
+          <View style={styles.statRow}>
+            <View style={[styles.statCard, styles.statCardTaking]}>
+              <Text style={styles.statLabel}>Taking Bus</Text>
+              <Text style={[styles.statValue, styles.statValueTaking]}>
+                {attendance.taking_count}
+              </Text>
+            </View>
+            <View style={[styles.statCard, styles.statCardAbsent]}>
+              <Text style={styles.statLabel}>Absent</Text>
+              <Text style={[styles.statValue, styles.statValueAbsent]}>
+                {attendance.absent_count}
+              </Text>
+            </View>
+          </View>
+
+          {!hasAttendanceMarks ? (
             <Text style={styles.muted}>
               No students have marked attendance yet for this route.
             </Text>
           ) : (
-            attendance.by_stop.map((bucket) => {
-              const stopName =
-                selectedRoute?.stops?.find((s) => s.id === bucket.stop_id)
-                  ?.name ||
-                (bucket.stop_id != null
-                  ? `Stop #${bucket.stop_id}`
-                  : "Unassigned stop");
-              return (
-                <View key={String(bucket.stop_id)} style={styles.stopBlock}>
-                  <Text style={styles.stopTitle}>
-                    {stopName}{" "}
-                    <Text style={styles.muted}>
-                      ({bucket.taking_count} taking / {bucket.absent_count}{" "}
-                      absent)
-                    </Text>
-                  </Text>
-                  {bucket.taking.map((a) => (
-                    <Text key={`t-${a.id}`} style={styles.takingName}>
-                      · {a.student_name || `Student #${a.student_id}`}
-                    </Text>
-                  ))}
-                  {bucket.absent.map((a) => (
-                    <Text key={`a-${a.id}`} style={styles.absentName}>
-                      · {a.student_name || `Student #${a.student_id}`} (absent)
-                    </Text>
-                  ))}
+            <View style={styles.pillGroups}>
+              {takingStudents.length > 0 ? (
+                <View style={styles.pillGroup}>
+                  <Text style={styles.pillGroupLabel}>Taking</Text>
+                  <View style={styles.pillWrap}>
+                    {takingStudents.map((a) => (
+                      <View key={`t-${a.id}`} style={styles.pillTaking}>
+                        <Text style={styles.pillTakingText} numberOfLines={1}>
+                          {a.student_name || `Student #${a.student_id}`}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
                 </View>
-              );
-            })
+              ) : null}
+              {absentStudents.length > 0 ? (
+                <View style={styles.pillGroup}>
+                  <Text style={styles.pillGroupLabel}>Absent</Text>
+                  <View style={styles.pillWrap}>
+                    {absentStudents.map((a) => (
+                      <View key={`a-${a.id}`} style={styles.pillAbsent}>
+                        <Text style={styles.pillAbsentText} numberOfLines={1}>
+                          {a.student_name || `Student #${a.student_id}`}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              ) : null}
+            </View>
           )}
         </View>
       ) : null}
-
-      <Pressable style={styles.logoutBtn} onPress={logout}>
-        <Text style={styles.logoutText}>Log out</Text>
-      </Pressable>
 
       <Modal
         visible={activeMissed != null}
@@ -906,10 +1023,10 @@ export default function DriverHomeScreen() {
                 (activeMissed?.message ? `\n${activeMissed.message}` : "")}
             </Text>
             <Pressable
-              style={styles.primaryBtn}
+              style={styles.startBtn}
               onPress={onAcknowledgeMissed}
             >
-              <Text style={styles.primaryBtnText}>Acknowledge</Text>
+              <Text style={styles.startBtnText}>Acknowledge</Text>
             </Pressable>
           </View>
         </View>
@@ -921,7 +1038,7 @@ export default function DriverHomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#0f172a",
+    backgroundColor: colors.bg,
   },
   content: {
     padding: 24,
@@ -931,159 +1048,258 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
+  headerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 6,
+    gap: 12,
+  },
   title: {
-    color: "#f8fafc",
+    color: colors.text,
     fontSize: 22,
+    fontWeight: "700",
+    flexShrink: 1,
+  },
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  statusPill: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderWidth: 1,
+  },
+  statusPillReady: {
+    backgroundColor: colors.successSoft,
+    borderColor: "rgba(34, 197, 94, 0.35)",
+  },
+  statusPillLive: {
+    backgroundColor: colors.successSoft,
+    borderColor: "rgba(34, 197, 94, 0.55)",
+  },
+  statusPillText: {
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0.2,
+  },
+  statusPillTextReady: {
+    color: colors.success,
+  },
+  statusPillTextLive: {
+    color: colors.accentGreen,
+  },
+  logoutIconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  driverName: {
+    color: colors.brandWordmark,
+    fontSize: 16,
     fontWeight: "600",
-    marginBottom: 4,
+    marginBottom: 14,
   },
   muted: {
-    color: "#94a3b8",
+    color: colors.muted,
     marginBottom: 12,
     lineHeight: 20,
   },
   card: {
-    backgroundColor: "#1e293b",
-    borderRadius: 12,
+    backgroundColor: colors.surface,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
     padding: 14,
     marginBottom: 16,
   },
   cardLabel: {
-    color: "#94a3b8",
+    color: colors.muted,
     fontSize: 12,
-    marginBottom: 4,
+    marginBottom: 8,
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
+  busRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  busIconBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.ctaIndigo,
+  },
   cardValue: {
-    color: "#f8fafc",
+    color: colors.text,
     fontSize: 16,
     fontWeight: "500",
+    flexShrink: 1,
   },
   section: {
     marginBottom: 20,
   },
   sectionTitle: {
-    color: "#f8fafc",
+    color: colors.text,
     fontSize: 17,
     fontWeight: "600",
     marginBottom: 10,
   },
   routeRow: {
-    backgroundColor: "#1e293b",
-    borderRadius: 10,
+    backgroundColor: colors.surface,
+    borderRadius: radius,
     padding: 14,
     marginBottom: 8,
-    borderWidth: 2,
-    borderColor: "transparent",
+    borderWidth: 1,
+    borderColor: colors.border,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
   },
   routeRowSelected: {
-    borderColor: "#38bdf8",
+    borderWidth: 2,
+    borderColor: colors.ctaIndigoMid,
+    backgroundColor: colors.indigoSoft,
+  },
+  routeTextCol: {
+    flex: 1,
   },
   routeName: {
-    color: "#e2e8f0",
+    color: colors.text,
     fontWeight: "600",
     fontSize: 15,
   },
   routeNameSelected: {
-    color: "#38bdf8",
+    color: colors.ctaIndigoMid,
   },
   routeMeta: {
-    color: "#64748b",
+    color: colors.muted,
     marginTop: 2,
     fontSize: 13,
+  },
+  routeMetaSelected: {
+    color: colors.brandWordmark,
+  },
+  mapSectionLabel: {
+    color: colors.muted,
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+    marginTop: 12,
+    marginBottom: 6,
   },
   mapHost: {
     height: 280,
     width: "100%",
     position: "relative",
-    marginTop: 10,
+    marginTop: 0,
     marginBottom: 8,
   },
   mapHostPreview: {
     height: 200,
     width: "100%",
     position: "relative",
-    marginTop: 8,
+    marginTop: 0,
     marginBottom: 4,
   },
   mapWrap: {
     height: 280,
     width: "100%",
-    borderRadius: 12,
+    borderRadius: radius,
     overflow: "hidden",
-    backgroundColor: "#1e293b",
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   mapWrapPreview: {
     height: 200,
     width: "100%",
-    borderRadius: 12,
+    borderRadius: radius,
     overflow: "hidden",
-    backgroundColor: "#1e293b",
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   mapOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(15,23,42,0.55)",
+    backgroundColor: colors.overlay,
     justifyContent: "center",
     alignItems: "center",
     padding: 16,
   },
   mapOverlayText: {
-    color: "#e2e8f0",
+    color: colors.onFilled,
     textAlign: "center",
   },
   mapKeyMissing: {
     minHeight: 120,
     width: "100%",
-    borderRadius: 12,
-    backgroundColor: "#422006",
+    borderRadius: radius,
+    backgroundColor: colors.warningSoft,
     borderWidth: 1,
-    borderColor: "#fbbf24",
+    borderColor: colors.warning,
     padding: 16,
     justifyContent: "center",
     marginBottom: 4,
   },
   mapKeyMissingText: {
-    color: "#fde68a",
+    color: colors.warning,
     textAlign: "center",
     lineHeight: 20,
   },
-  primaryBtn: {
-    backgroundColor: "#38bdf8",
-    borderRadius: 10,
+  btnContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  startBtn: {
+    backgroundColor: colors.ctaIndigo,
+    borderRadius: radius,
     padding: 14,
     alignItems: "center",
     marginTop: 12,
   },
-  primaryBtnText: {
-    color: "#0f172a",
+  startBtnText: {
+    color: colors.onFilled,
     fontWeight: "700",
     fontSize: 16,
   },
-  dangerBtn: {
-    backgroundColor: "#dc2626",
-    borderRadius: 10,
+  endBtn: {
+    backgroundColor: "#B91C1C",
+    borderRadius: radius,
     padding: 14,
     alignItems: "center",
     marginTop: 14,
   },
-  dangerBtnText: {
-    color: "#f8fafc",
+  endBtnText: {
+    color: colors.onFilled,
     fontWeight: "700",
     fontSize: 16,
   },
   sosBtn: {
-    backgroundColor: "#991b1b",
-    borderRadius: 12,
+    backgroundColor: colors.danger,
+    borderRadius: radius,
     paddingVertical: 22,
     paddingHorizontal: 14,
     alignItems: "center",
     marginTop: 12,
     borderWidth: 2,
-    borderColor: "#f87171",
+    borderColor: "#F87171",
   },
   sosBtnText: {
-    color: "#fef2f2",
+    color: colors.onFilled,
     fontWeight: "900",
     fontSize: 18,
     letterSpacing: 1,
@@ -1091,118 +1307,171 @@ const styles = StyleSheet.create({
   btnDisabled: {
     opacity: 0.6,
   },
+  statRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 12,
+  },
+  statCard: {
+    flex: 1,
+    backgroundColor: colors.surface,
+    borderRadius: radius,
+    borderWidth: 1,
+    padding: 14,
+  },
+  statCardTaking: {
+    borderColor: "rgba(34, 197, 94, 0.35)",
+    backgroundColor: colors.successSoft,
+  },
+  statCardAbsent: {
+    borderColor: "rgba(245, 158, 11, 0.35)",
+    backgroundColor: colors.warningSoft,
+  },
+  statLabel: {
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: "600",
+    marginBottom: 6,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  statValue: {
+    fontSize: 26,
+    fontWeight: "800",
+  },
+  statValueTaking: {
+    color: colors.success,
+  },
+  statValueAbsent: {
+    color: colors.warning,
+  },
+  pillGroups: {
+    gap: 12,
+  },
+  pillGroup: {
+    marginBottom: 4,
+  },
+  pillGroupLabel: {
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: "600",
+    marginBottom: 8,
+  },
+  pillWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  pillTaking: {
+    backgroundColor: colors.successSoft,
+    borderWidth: 1,
+    borderColor: "rgba(34, 197, 94, 0.35)",
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    maxWidth: "100%",
+  },
+  pillTakingText: {
+    color: colors.success,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  pillAbsent: {
+    backgroundColor: colors.warningSoft,
+    borderWidth: 1,
+    borderColor: "rgba(245, 158, 11, 0.35)",
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    maxWidth: "100%",
+  },
+  pillAbsentText: {
+    color: colors.warning,
+    fontSize: 13,
+    fontWeight: "600",
+  },
   speedBanner: {
-    backgroundColor: "#7f1d1d",
-    borderRadius: 10,
+    backgroundColor: colors.dangerSoft,
+    borderRadius: radius,
     padding: 14,
     marginBottom: 12,
     borderWidth: 2,
-    borderColor: "#ef4444",
+    borderColor: colors.danger,
   },
   speedBannerMap: {
-    backgroundColor: "#7f1d1d",
-    borderRadius: 8,
+    backgroundColor: colors.dangerSoft,
+    borderRadius: radius,
     padding: 10,
     marginTop: 8,
     borderWidth: 2,
-    borderColor: "#ef4444",
+    borderColor: colors.danger,
   },
   speedBannerTitle: {
-    color: "#fecaca",
+    color: colors.danger,
     fontWeight: "800",
     fontSize: 16,
     marginBottom: 4,
     textAlign: "center",
   },
   speedBannerBody: {
-    color: "#fee2e2",
+    color: colors.danger,
     textAlign: "center",
   },
   missedBanner: {
-    backgroundColor: "#7c2d12",
-    borderRadius: 10,
+    backgroundColor: colors.warningSoft,
+    borderRadius: radius,
     padding: 12,
     marginTop: 10,
     borderWidth: 1,
-    borderColor: "#fb923c",
+    borderColor: colors.warning,
   },
   missedBannerTitle: {
-    color: "#fed7aa",
+    color: colors.warning,
     fontWeight: "800",
     marginBottom: 4,
   },
   missedBannerBody: {
-    color: "#ffedd5",
+    color: colors.warning,
   },
   warnBanner: {
-    backgroundColor: "#422006",
-    borderRadius: 10,
+    backgroundColor: colors.warningSoft,
+    borderRadius: radius,
     padding: 12,
     marginBottom: 12,
   },
   warnText: {
-    color: "#fbbf24",
+    color: colors.warning,
     lineHeight: 20,
   },
   error: {
-    color: "#f87171",
+    color: colors.danger,
     marginBottom: 12,
   },
   info: {
-    color: "#86efac",
+    color: colors.success,
     marginBottom: 12,
-  },
-  stopBlock: {
-    backgroundColor: "#1e293b",
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 8,
-  },
-  stopTitle: {
-    color: "#f8fafc",
-    fontWeight: "600",
-    marginBottom: 6,
-  },
-  takingName: {
-    color: "#86efac",
-    marginBottom: 2,
-  },
-  absentName: {
-    color: "#94a3b8",
-    marginBottom: 2,
-  },
-  logoutBtn: {
-    backgroundColor: "#334155",
-    borderRadius: 10,
-    padding: 14,
-    alignItems: "center",
-    marginTop: 8,
-  },
-  logoutText: {
-    color: "#f8fafc",
-    fontWeight: "600",
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.7)",
+    backgroundColor: colors.modalScrim,
     justifyContent: "center",
     padding: 24,
   },
   modalCard: {
-    backgroundColor: "#1e293b",
-    borderRadius: 14,
+    backgroundColor: colors.surface,
+    borderRadius: radius,
     padding: 20,
     borderWidth: 2,
-    borderColor: "#fb923c",
+    borderColor: colors.warning,
   },
   modalTitle: {
-    color: "#fdba74",
+    color: colors.warning,
     fontSize: 20,
     fontWeight: "800",
     marginBottom: 10,
   },
   modalBody: {
-    color: "#e2e8f0",
+    color: colors.text,
     lineHeight: 22,
     marginBottom: 8,
   },

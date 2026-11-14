@@ -20,3 +20,28 @@ export async function createDriver(payload: {
   );
   return data.driver_profile;
 }
+
+export async function updateDriver(
+  driverProfileId: number,
+  payload: Partial<{
+    full_name: string;
+    phone: string | null;
+    license_number: string | null;
+    bus_id: number | null;
+    password: string;
+  }>
+): Promise<Driver> {
+  const { data } = await api.patch<{ driver_profile: Driver }>(
+    `/api/users/drivers/${driverProfileId}`,
+    payload
+  );
+  return data.driver_profile;
+}
+
+export async function deleteDriver(driverProfileId: number): Promise<Driver> {
+  const { data } = await api.delete<{
+    message: string;
+    driver_profile: Driver;
+  }>(`/api/users/drivers/${driverProfileId}`);
+  return data.driver_profile;
+}

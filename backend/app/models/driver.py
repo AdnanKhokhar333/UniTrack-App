@@ -31,4 +31,5 @@ class DriverProfile(db.Model):
             "phone": self.phone,
             "license_number": self.license_number,
             "email": self.user.email if self.user else None,
+            "is_active": self.user.is_active if self.user else True,
         }

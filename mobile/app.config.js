@@ -7,10 +7,10 @@ export default {
     slug: "unitrack",
     version: "0.1.0",
     orientation: "portrait",
-    userInterfaceStyle: "light",
+    userInterfaceStyle: "dark",
     splash: {
       resizeMode: "contain",
-      backgroundColor: "#0f172a",
+      backgroundColor: "#0B0E14",
     },
     web: {
       bundler: "metro",
@@ -31,7 +31,7 @@ export default {
     },
     android: {
       adaptiveIcon: {
-        backgroundColor: "#0f172a",
+        backgroundColor: "#0B0E14",
       },
       package: "edu.unitrack.app",
       config: {
@@ -69,7 +69,7 @@ export default {
       ],
     ],
     extra: {
-      apiUrl: process.env.EXPO_PUBLIC_API_URL || "http://192.168.100.8:5000",
+      apiUrl: process.env.EXPO_PUBLIC_API_URL || "http://192.168.100.19:5000",
       googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || "",
       eas: {
         projectId: "1b0083ed-8e8e-49f1-8572-f38ed8a85cc9",

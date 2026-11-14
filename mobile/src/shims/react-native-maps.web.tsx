@@ -4,6 +4,7 @@
  */
 import React from "react";
 import { StyleSheet, Text, View, type ViewProps } from "react-native";
+import { colors } from "../theme";
 
 export type Region = {
   latitude: number;
@@ -87,7 +88,7 @@ export function Marker({ title, pinColor }: MarkerProps) {
     <View
       style={[
         styles.marker,
-        { backgroundColor: pinColor || "#94a3b8" },
+        { backgroundColor: pinColor || colors.muted },
       ]}
       accessibilityLabel={title}
     />
@@ -101,13 +102,13 @@ export default MapView;
 const styles = StyleSheet.create({
   map: {
     flex: 1,
-    backgroundColor: "#1e293b",
+    backgroundColor: colors.bgElev,
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
   },
   hint: {
-    color: "#94a3b8",
+    color: colors.muted,
     textAlign: "center",
     paddingHorizontal: 16,
   },

@@ -7,6 +7,11 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": "http://localhost:5000",
+      // Socket.IO (live trip_location) — websocket upgrade through Vite in dev
+      "/socket.io": {
+        target: "http://localhost:5000",
+        ws: true,
+      },
     },
   },
 });

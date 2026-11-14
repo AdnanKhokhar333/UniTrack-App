@@ -2,6 +2,8 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import get_jwt
 
 from app.models.route import Route, Stop
+from app.models.student import StudentProfile
+from app.models.trip import Trip, TripStatus
 from app.utils.decorators import role_required
 from app.utils.extensions import db
 
@@ -128,9 +130,29 @@ def add_stop(route_id: int):
 @routes_bp.delete("/<int:route_id>")
 @role_required("admin")
 def deactivate_route(route_id: int):
+    """Soft-deactivate a route. Blocked if students are assigned or a trip is active."""
     route = Route.query.get(route_id)
     if not route:
         return jsonify({"error": "Route not found"}), 404
+
+    assigned = StudentProfile.query.filter_by(active_route_id=route.id).count()
+    if assigned:
+        return jsonify(
+            {
+                "error": (
+                    "Route has assigned students — reassign them before deactivating"
+                )
+            }
+        ), 409
+
+    active_trip = Trip.query.filter_by(
+        route_id=route.id, status=TripStatus.ACTIVE
+    ).first()
+    if active_trip:
+        return jsonify(
+            {"error": "Route has an active trip — end the trip before deactivating"}
+        ), 409
+
     route.is_active = False
     db.session.commit()
-    return jsonify({"route": route.to_dict()}), 200
+    return jsonify({"message": "Route deactivated", "route": route.to_dict()}), 200

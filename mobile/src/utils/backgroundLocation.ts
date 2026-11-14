@@ -2,6 +2,7 @@ import * as Location from "expo-location";
 import * as TaskManager from "expo-task-manager";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { postTripLocation } from "../api/trips";
+import { colors } from "../theme";
 import { enqueueLocation } from "./locationQueue";
 
 export const BACKGROUND_LOCATION_TASK = "unitrack-background-location";
@@ -86,7 +87,7 @@ export async function startBackgroundLocation(): Promise<{
     foregroundService: {
       notificationTitle: "UniTrack trip active",
       notificationBody: "Sharing bus location with students.",
-      notificationColor: "#0f172a",
+      notificationColor: colors.primary,
     },
     pausesUpdatesAutomatically: false,
   });

@@ -28,3 +28,10 @@ export async function updateBus(
   const { data } = await api.put<{ bus: Bus }>(`/api/buses/${busId}`, payload);
   return data.bus;
 }
+
+export async function deleteBus(busId: number): Promise<Bus> {
+  const { data } = await api.delete<{ message: string; bus: Bus }>(
+    `/api/buses/${busId}`
+  );
+  return data.bus;
+}

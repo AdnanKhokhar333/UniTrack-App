@@ -15,13 +15,24 @@ import type {
   StudentProfile,
 } from "../types";
 
+type PortalRole = "student" | "driver";
+
 type AuthContextValue = {
   user: AuthUser | null;
   token: string | null;
   driverProfile: DriverProfile | null;
   studentProfile: StudentProfile | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  /**
+   * Authenticate with email/password. Server role always wins.
+   * If `expectedRole` is set and the account role differs, session is not
+   * persisted and an Error is thrown (portal mismatch messaging).
+   */
+  login: (
+    email: string,
+    password: string,
+    expectedRole?: PortalRole
+  ) => Promise<AuthUser>;
   logout: () => Promise<void>;
   refreshProfile: () => Promise<MeResponse | null>;
 };
@@ -151,11 +162,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [applyProfiles]);
 
   const login = useCallback(
-    async (email: string, password: string) => {
+    async (
+      email: string,
+      password: string,
+      expectedRole?: PortalRole
+    ): Promise<AuthUser> => {
       const data = await loginRequest(email, password);
       if (data.user?.role === "admin") {
         throw new Error("Admins use the web dashboard, not the mobile app.");
       }
+
+      // UI tab is a hint only — never send role to the backend as authority
+      if (expectedRole && data.user.role !== expectedRole) {
+        await clearSession();
+        const portal =
+          data.user.role === "student"
+            ? "Student"
+            : data.user.role === "driver"
+              ? "Driver"
+              : "correct";
+        throw new Error(
+          `This account belongs to the ${portal} portal. Switch to the ${portal} tab to continue.`
+        );
+      }
+
       await persistSession({
         token: data.access_token,
         user: data.user,
@@ -168,6 +198,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         data.driver_profile ?? null,
         data.student_profile ?? null
       );
+      return data.user;
     },
     [applyProfiles]
   );

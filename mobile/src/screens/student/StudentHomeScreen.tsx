@@ -8,14 +8,24 @@ import {
   View,
 } from "react-native";
 import MapView, { Marker, type Region } from "react-native-maps";
-import { useIsFocused } from "@react-navigation/native";
+import { Ionicons } from "@expo/vector-icons";
+import {
+  useIsFocused,
+  useNavigation,
+} from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useAuth } from "../../auth/AuthContext";
+import type { StudentStackParamList } from "../../navigation/StudentNavigator";
 import {
   getTodayAttendance,
   submitAttendance,
 } from "../../api/attendance";
 import { reportMissedBus } from "../../api/alerts";
 import { listRoutes } from "../../api/routes";
+import {
+  createLiveSocket,
+  type TripLocationEvent,
+} from "../../api/socket";
 import { getTrip, listActiveTrips } from "../../api/trips";
 import SafeMapView from "../../components/SafeMapView";
 import type {
@@ -31,6 +41,7 @@ import {
   haversineKm,
   isValidCoord,
 } from "../../utils/geo";
+import { toTitleCase } from "../../utils/format";
 import {
   GOOGLE_MAPS_KEY_MISSING_MESSAGE,
   isGoogleMapsApiKeyMissing,
@@ -39,8 +50,10 @@ import {
   notifyBusApproaching,
   setupPushNotifications,
 } from "../../utils/notifications";
+import { colors, radius } from "../../theme";
 
 const POLL_MS = 8000;
+const SLOW_POLL_MS = 30000;
 const PROXIMITY_KM = 1;
 const PROXIMITY_ETA_MIN = 5;
 const DEFAULT_REGION: Region = {
@@ -90,7 +103,9 @@ function regionFromStops(stops: Stop[], bus?: TripLocation | null): Region {
 }
 
 export default function StudentHomeScreen() {
-  const { user, studentProfile, logout, refreshProfile } = useAuth();
+  const { user, token, studentProfile, logout, refreshProfile } = useAuth();
+  const navigation =
+    useNavigation<NativeStackNavigationProp<StudentStackParamList>>();
   const isFocused = useIsFocused();
   const [route, setRoute] = useState<Route | null>(null);
   const [attendance, setAttendance] = useState<Attendance | null>(null);
@@ -103,6 +118,8 @@ export default function StudentHomeScreen() {
   const [mapGesturing, setMapGesturing] = useState(false);
   const mapRef = useRef<MapView | null>(null);
   const proximityNotifiedTrip = useRef<number | null>(null);
+  const socketConnectedRef = useRef(false);
+  const lastSlowPollRef = useRef(0);
 
   const activeRouteId = studentProfile?.active_route_id ?? null;
   const myStopId = studentProfile?.stop_id ?? null;
@@ -117,6 +134,15 @@ export default function StudentHomeScreen() {
     () => stops.find((s) => s.id === myStopId) ?? null,
     [stops, myStopId]
   );
+
+  const displayName = useMemo(() => {
+    const raw = studentProfile?.full_name?.trim();
+    if (!raw) return user?.email ?? "Student";
+    return toTitleCase(raw);
+  }, [studentProfile?.full_name, user?.email]);
+
+  const passApproved =
+    user?.is_approved ?? studentProfile?.is_approved ?? false;
 
   const loadStatic = useCallback(async () => {
     setLoading(true);
@@ -156,7 +182,7 @@ export default function StudentHomeScreen() {
     setupPushNotifications().catch(() => undefined);
   }, [isFocused, user?.id]);
 
-  // Poll active trip for student's route while screen focused
+  // Live bus location: Socket.IO while map focused; HTTP poll fallback if socket down
   useEffect(() => {
     if (!isFocused || !activeRouteId) {
       setActiveTrip(null);
@@ -164,6 +190,8 @@ export default function StudentHomeScreen() {
     }
 
     let cancelled = false;
+    socketConnectedRef.current = false;
+    lastSlowPollRef.current = 0;
 
     const poll = async () => {
       try {
@@ -173,13 +201,12 @@ export default function StudentHomeScreen() {
           trips.find(
             (t) => t.route_id === activeRouteId && t.status === "active"
           ) ?? null;
-        // Prefer GET /trips/:id so latest_location is always fresh for the bus pin
         if (mine?.id) {
           try {
             const fresh = await getTrip(mine.id);
             if (!cancelled && fresh) mine = fresh;
           } catch {
-            // Keep list payload (already includes latest_location when available)
+            // Keep list payload
           }
         }
         if (!cancelled) setActiveTrip(mine);
@@ -188,13 +215,83 @@ export default function StudentHomeScreen() {
       }
     };
 
-    poll();
-    const id = setInterval(poll, POLL_MS);
+    const applySocketLocation = (ev: TripLocationEvent) => {
+      if (cancelled || ev.route_id !== activeRouteId) return;
+      if (
+        !Number.isFinite(ev.latitude) ||
+        !Number.isFinite(ev.longitude) ||
+        !ev.trip_id
+      ) {
+        return;
+      }
+      setActiveTrip((prev) => {
+        const loc: TripLocation = {
+          id: prev?.latest_location?.id ?? 0,
+          trip_id: ev.trip_id,
+          latitude: ev.latitude,
+          longitude: ev.longitude,
+          speed_kmh: ev.speed_kmh,
+          recorded_at: ev.recorded_at,
+        };
+        if (prev && prev.id === ev.trip_id) {
+          return { ...prev, latest_location: loc };
+        }
+        return {
+          id: ev.trip_id,
+          bus_id: ev.bus_id,
+          driver_id: prev?.driver_id ?? 0,
+          route_id: ev.route_id,
+          status: "active",
+          started_at: prev?.started_at ?? null,
+          ended_at: null,
+          latest_location: loc,
+        };
+      });
+    };
+
+    void poll();
+
+    let socket: ReturnType<typeof createLiveSocket> | null = null;
+    if (token) {
+      socket = createLiveSocket(token);
+      socket.on("connect", () => {
+        if (cancelled) return;
+        socketConnectedRef.current = true;
+        socket?.emit(
+          "join",
+          { room: "route", route_id: activeRouteId },
+          (_ack: { ok?: boolean } | undefined) => undefined
+        );
+      });
+      socket.on("disconnect", () => {
+        socketConnectedRef.current = false;
+      });
+      socket.on("trip_location", applySocketLocation);
+      socket.connect();
+    }
+
+    const id = setInterval(() => {
+      const now = Date.now();
+      if (socketConnectedRef.current) {
+        if (now - lastSlowPollRef.current >= SLOW_POLL_MS) {
+          lastSlowPollRef.current = now;
+          void poll();
+        }
+      } else {
+        void poll();
+      }
+    }, POLL_MS);
+
     return () => {
       cancelled = true;
       clearInterval(id);
+      socketConnectedRef.current = false;
+      if (socket) {
+        socket.off("trip_location", applySocketLocation);
+        socket.disconnect();
+      }
     };
-  }, [isFocused, activeRouteId]);
+  }, [isFocused, activeRouteId, token]);
 
   const busLoc = activeTrip?.latest_location ?? null;
   const hasBusGps =
@@ -296,7 +393,7 @@ export default function StudentHomeScreen() {
   if (loading) {
     return (
       <View style={[styles.container, styles.center]}>
-        <ActivityIndicator size="large" color="#38bdf8" />
+        <ActivityIndicator size="large" color={colors.ctaIndigoMid} />
       </View>
     );
   }
@@ -313,9 +410,21 @@ export default function StudentHomeScreen() {
       scrollEnabled={!mapGesturing}
       keyboardShouldPersistTaps="handled"
     >
-      <Text style={styles.title}>Student Mode</Text>
-      <Text style={styles.muted}>
-        {studentProfile?.full_name || user?.email}
+      <View style={styles.headerRow}>
+        <Text style={styles.title}>Student Ops</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Log out"
+          hitSlop={8}
+          onPress={logout}
+          style={styles.logoutIconBtn}
+        >
+          <Ionicons name="log-out-outline" size={20} color={colors.muted} />
+        </Pressable>
+      </View>
+
+      <Text style={styles.profileLine}>
+        {displayName}
         {studentProfile?.student_number
           ? ` · ${studentProfile.student_number}`
           : ""}
@@ -332,17 +441,66 @@ export default function StudentHomeScreen() {
       ) : (
         <View style={styles.card}>
           <Text style={styles.cardLabel}>Your route</Text>
-          <Text style={styles.cardValue}>
-            {route?.name ?? `Route #${activeRouteId}`}
-          </Text>
-          {route?.description ? (
-            <Text style={styles.muted}>{route.description}</Text>
-          ) : null}
+          <View style={styles.routeRow}>
+            <View style={styles.routeIconBadge}>
+              <Ionicons name="bus" size={18} color={colors.onFilled} />
+            </View>
+            <View style={styles.routeTextCol}>
+              <Text style={styles.cardValue}>
+                {route?.name ?? `Route #${activeRouteId}`}
+              </Text>
+              {route?.description ? (
+                <Text style={styles.routeDesc}>{route.description}</Text>
+              ) : null}
+            </View>
+            <View
+              style={[
+                styles.passPill,
+                passApproved ? styles.passPillActive : styles.passPillRevoked,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.passPillText,
+                  passApproved
+                    ? styles.passPillTextActive
+                    : styles.passPillTextRevoked,
+                ]}
+              >
+                {passApproved ? "• Active Pass" : "• Pass Revoked"}
+              </Text>
+            </View>
+          </View>
         </View>
       )}
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {info ? <Text style={styles.info}>{info}</Text> : null}
+
+      <View style={styles.quickRow}>
+        <Pressable
+          style={styles.quickBtn}
+          onPress={() => navigation.navigate("BusPass")}
+        >
+          <Ionicons
+            name="qr-code-outline"
+            size={18}
+            color={colors.ctaIndigoMid}
+          />
+          <Text style={styles.quickBtnText}>Bus Pass</Text>
+        </Pressable>
+        <Pressable
+          style={styles.quickBtn}
+          onPress={() => navigation.navigate("Feedback")}
+        >
+          <Ionicons
+            name="star-outline"
+            size={18}
+            color={colors.ctaIndigoMid}
+          />
+          <Text style={styles.quickBtnText}>Rate / Complaint</Text>
+        </Pressable>
+      </View>
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Today&apos;s attendance</Text>
@@ -388,7 +546,10 @@ export default function StudentHomeScreen() {
           </Pressable>
         </View>
         {busy ? (
-          <ActivityIndicator color="#38bdf8" style={{ marginTop: 8 }} />
+          <ActivityIndicator
+            color={colors.ctaIndigoMid}
+            style={{ marginTop: 8 }}
+          />
         ) : status ? (
           <Text style={styles.statusHint}>
             Marked: {status === "taking" ? "Will Take Bus" : "Absent"}
@@ -404,40 +565,53 @@ export default function StudentHomeScreen() {
           {stops.length === 0 ? (
             <Text style={styles.muted}>No stops on this route yet.</Text>
           ) : (
-            stops.map((s, idx) => (
-              <View
-                key={s.id}
-                style={[
-                  styles.stopRow,
-                  myStopId === s.id && styles.stopRowMine,
-                ]}
-              >
-                <Text style={styles.stopOrder}>{idx + 1}</Text>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.stopName}>{s.name}</Text>
-                  {myStopId === s.id ? (
-                    <Text style={styles.myStop}>Your stop</Text>
-                  ) : null}
+            stops.map((s, idx) => {
+              const mine = myStopId === s.id;
+              return (
+                <View
+                  key={s.id}
+                  style={[styles.stopRow, mine && styles.stopRowMine]}
+                >
+                  {mine ? (
+                    <View style={styles.stopPinBadge}>
+                      <Ionicons
+                        name="location"
+                        size={16}
+                        color={colors.onFilled}
+                      />
+                    </View>
+                  ) : (
+                    <Text style={styles.stopOrder}>{idx + 1}</Text>
+                  )}
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.stopName}>{s.name}</Text>
+                    {mine ? (
+                      <Text style={styles.myStop}>Your stop</Text>
+                    ) : null}
+                  </View>
                 </View>
-              </View>
-            ))
+              );
+            })
           )}
         </View>
       ) : null}
 
       {activeRouteId ? (
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Route map</Text>
-          {tripActive ? (
-            <Text style={styles.muted}>
-              Trip #{activeTrip.id} active — refreshing every ~{POLL_MS / 1000}
-              s.
+          <View style={styles.mapHeaderRow}>
+            <Text style={[styles.sectionTitle, styles.mapSectionTitle]}>
+              Route map
             </Text>
-          ) : (
-            <Text style={styles.waitingText}>
-              Waiting for driver to start trip
-            </Text>
-          )}
+            {tripActive ? (
+              <View style={styles.liveBadge}>
+                <Text style={styles.liveBadgeText}>
+                  • Trip #{activeTrip.id} Live
+                </Text>
+              </View>
+            ) : (
+              <Text style={styles.waitingText}>Waiting for driver trip</Text>
+            )}
+          </View>
           {proximity && tripActive ? (
             <Text style={styles.etaText}>
               ~{proximity.dist.toFixed(1)} km to your stop
@@ -482,7 +656,11 @@ export default function StudentHomeScreen() {
                           ? "Your stop"
                           : `Stop ${s.sequence_order}`
                       }
-                      pinColor={myStopId === s.id ? "#38bdf8" : "#94a3b8"}
+                      pinColor={
+                        myStopId === s.id
+                          ? colors.ctaIndigoMid
+                          : colors.muted
+                      }
                     />
                   ))}
                 {tripActive && hasBusGps && busLoc ? (
@@ -497,20 +675,20 @@ export default function StudentHomeScreen() {
                         ? `${busLoc.speed_kmh.toFixed(0)} km/h`
                         : "Live location"
                     }
-                    pinColor="#22c55e"
+                    pinColor={colors.success}
                   />
                 ) : null}
               </SafeMapView>
               {stops.every((s) => !isValidCoord(s.latitude, s.longitude)) ? (
-                <View style={styles.mapOverlay} pointerEvents="none">
-                  <Text style={styles.mapOverlayText}>
-                    No valid stop coordinates — showing default map region.
+                <View style={styles.mapOverlayPill} pointerEvents="none">
+                  <Text style={styles.mapOverlayPillText}>
+                    No valid stop coordinates
                   </Text>
                 </View>
               ) : tripActive && !hasBusGps ? (
-                <View style={styles.mapOverlay} pointerEvents="none">
-                  <Text style={styles.mapOverlayText}>
-                    Waiting for first GPS fix from the driver…
+                <View style={styles.mapOverlayPill} pointerEvents="none">
+                  <Text style={styles.mapOverlayPillText}>
+                    Waiting for driver GPS…
                   </Text>
                 </View>
               ) : null}
@@ -532,17 +710,20 @@ export default function StudentHomeScreen() {
             disabled={missedBusy}
           >
             {missedBusy ? (
-              <ActivityIndicator color="#f8fafc" />
+              <ActivityIndicator color={colors.onFilled} />
             ) : (
-              <Text style={styles.missedBtnText}>Missed Bus</Text>
+              <View style={styles.btnContent}>
+                <Ionicons
+                  name="notifications-outline"
+                  size={18}
+                  color={colors.onFilled}
+                />
+                <Text style={styles.missedBtnText}>Missed Bus</Text>
+              </View>
             )}
           </Pressable>
         </View>
       ) : null}
-
-      <Pressable style={styles.logoutBtn} onPress={logout}>
-        <Text style={styles.logoutText}>Log out</Text>
-      </Pressable>
     </ScrollView>
   );
 }
@@ -550,7 +731,7 @@ export default function StudentHomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#0f172a",
+    backgroundColor: colors.bg,
   },
   content: {
     padding: 24,
@@ -560,44 +741,139 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
+  headerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 6,
+    gap: 12,
+  },
   title: {
-    color: "#f8fafc",
+    color: colors.text,
     fontSize: 22,
+    fontWeight: "700",
+    flexShrink: 1,
+  },
+  logoutIconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  profileLine: {
+    color: colors.brandWordmark,
+    fontSize: 16,
     fontWeight: "600",
-    marginBottom: 4,
+    marginBottom: 14,
   },
   muted: {
-    color: "#94a3b8",
+    color: colors.muted,
     marginBottom: 12,
     lineHeight: 20,
   },
   card: {
-    backgroundColor: "#1e293b",
-    borderRadius: 12,
+    backgroundColor: colors.surface,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
     padding: 14,
     marginBottom: 16,
   },
   cardLabel: {
-    color: "#94a3b8",
+    color: colors.muted,
     fontSize: 12,
-    marginBottom: 4,
+    marginBottom: 8,
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
+  routeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  routeIconBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.ctaIndigo,
+  },
+  routeTextCol: {
+    flex: 1,
+    minWidth: 0,
+  },
   cardValue: {
-    color: "#f8fafc",
-    fontSize: 18,
+    color: colors.text,
+    fontSize: 16,
     fontWeight: "600",
-    marginBottom: 4,
+  },
+  routeDesc: {
+    color: colors.muted,
+    marginTop: 2,
+    fontSize: 13,
+  },
+  passPill: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderWidth: 1,
+    flexShrink: 0,
+  },
+  passPillActive: {
+    backgroundColor: colors.successSoft,
+    borderColor: "rgba(34, 197, 94, 0.45)",
+  },
+  passPillRevoked: {
+    backgroundColor: colors.dangerSoft,
+    borderColor: "rgba(239, 68, 68, 0.4)",
+  },
+  passPillText: {
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0.2,
+  },
+  passPillTextActive: {
+    color: colors.accentGreen,
+  },
+  passPillTextRevoked: {
+    color: colors.danger,
   },
   section: {
     marginBottom: 22,
   },
   sectionTitle: {
-    color: "#f8fafc",
+    color: colors.text,
     fontSize: 17,
     fontWeight: "600",
     marginBottom: 8,
+  },
+  quickRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 18,
+  },
+  quickBtn: {
+    flex: 1,
+    flexDirection: "row",
+    gap: 8,
+    backgroundColor: colors.indigoSoft,
+    borderRadius: radius,
+    paddingVertical: 14,
+    paddingHorizontal: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: colors.ctaIndigoMid,
+  },
+  quickBtnText: {
+    color: colors.ctaIndigoMid,
+    fontWeight: "700",
+    fontSize: 13,
   },
   toggleRow: {
     flexDirection: "row",
@@ -605,73 +881,110 @@ const styles = StyleSheet.create({
   },
   toggleBtn: {
     flex: 1,
-    backgroundColor: "#1e293b",
-    borderRadius: 12,
+    backgroundColor: colors.surface,
+    borderRadius: radius,
     paddingVertical: 18,
     paddingHorizontal: 10,
     alignItems: "center",
     borderWidth: 2,
-    borderColor: "#334155",
+    borderColor: colors.border,
   },
   toggleTaking: {
-    backgroundColor: "#14532d",
-    borderColor: "#22c55e",
+    backgroundColor: colors.successSoft,
+    borderColor: colors.success,
   },
   toggleAbsent: {
-    backgroundColor: "#7f1d1d",
-    borderColor: "#f87171",
+    backgroundColor: colors.dangerSoft,
+    borderColor: colors.danger,
   },
   toggleText: {
-    color: "#cbd5e1",
+    color: colors.muted,
     fontWeight: "700",
     fontSize: 15,
     textAlign: "center",
   },
   toggleTextActive: {
-    color: "#f8fafc",
+    color: colors.text,
   },
   btnDisabled: {
     opacity: 0.5,
   },
   statusHint: {
-    color: "#94a3b8",
+    color: colors.muted,
     marginTop: 10,
   },
   stopRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#1e293b",
-    borderRadius: 10,
+    backgroundColor: colors.surface,
+    borderRadius: radius,
     padding: 12,
     marginBottom: 8,
     gap: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   stopRowMine: {
-    borderWidth: 1,
-    borderColor: "#38bdf8",
+    borderWidth: 1.5,
+    borderColor: colors.ctaIndigoMid,
+    backgroundColor: colors.indigoSoft,
+  },
+  stopPinBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.ctaIndigoMid,
   },
   stopOrder: {
-    color: "#38bdf8",
+    color: colors.ctaIndigoMid,
     fontWeight: "700",
     width: 24,
     textAlign: "center",
   },
   stopName: {
-    color: "#f8fafc",
+    color: colors.text,
     fontWeight: "500",
   },
   myStop: {
-    color: "#38bdf8",
+    color: colors.ctaIndigoMid,
     fontSize: 12,
     marginTop: 2,
-  },
-  waitingText: {
-    color: "#fbbf24",
-    marginBottom: 10,
     fontWeight: "600",
   },
+  mapHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    marginBottom: 8,
+    flexWrap: "wrap",
+  },
+  mapSectionTitle: {
+    marginBottom: 0,
+  },
+  liveBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    backgroundColor: colors.successSoft,
+    borderWidth: 1,
+    borderColor: "rgba(34, 197, 94, 0.45)",
+  },
+  liveBadgeText: {
+    color: colors.accentGreen,
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0.2,
+  },
+  waitingText: {
+    color: colors.muted,
+    fontWeight: "600",
+    fontSize: 13,
+  },
   etaText: {
-    color: "#86efac",
+    color: colors.success,
     marginBottom: 10,
     fontWeight: "600",
   },
@@ -683,79 +996,87 @@ const styles = StyleSheet.create({
   mapWrap: {
     height: 280,
     width: "100%",
-    borderRadius: 12,
+    borderRadius: radius,
     overflow: "hidden",
-    backgroundColor: "#1e293b",
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   mapKeyMissing: {
     minHeight: 120,
     width: "100%",
-    borderRadius: 12,
-    backgroundColor: "#422006",
+    borderRadius: radius,
+    backgroundColor: colors.warningSoft,
     borderWidth: 1,
-    borderColor: "#fbbf24",
+    borderColor: colors.warning,
     padding: 16,
     justifyContent: "center",
   },
   mapKeyMissingText: {
-    color: "#fde68a",
+    color: colors.warning,
     textAlign: "center",
     lineHeight: 20,
   },
-  mapOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(15,23,42,0.55)",
-    justifyContent: "center",
+  mapOverlayPill: {
+    position: "absolute",
+    top: 12,
+    alignSelf: "center",
+    left: 16,
+    right: 16,
+    backgroundColor: "rgba(11, 14, 20, 0.82)",
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
     alignItems: "center",
-    padding: 16,
   },
-  mapOverlayText: {
-    color: "#e2e8f0",
+  mapOverlayPillText: {
+    color: colors.onFilled,
+    fontSize: 13,
+    fontWeight: "600",
     textAlign: "center",
   },
   missedBtn: {
-    backgroundColor: "#b45309",
-    borderRadius: 10,
+    backgroundColor: "rgba(185, 28, 28, 0.85)",
+    borderRadius: radius,
     padding: 14,
     alignItems: "center",
+    borderWidth: 1,
+    borderColor: "rgba(245, 158, 11, 0.55)",
+  },
+  btnContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
   },
   missedBtnText: {
-    color: "#f8fafc",
+    color: colors.onFilled,
     fontWeight: "700",
     fontSize: 16,
   },
   warnBanner: {
-    backgroundColor: "#422006",
-    borderRadius: 12,
+    backgroundColor: colors.warningSoft,
+    borderRadius: radius,
     padding: 14,
     marginBottom: 16,
   },
   warnTitle: {
-    color: "#fbbf24",
+    color: colors.warning,
     fontWeight: "700",
     marginBottom: 4,
   },
   warnBody: {
-    color: "#fde68a",
+    color: colors.warning,
     lineHeight: 20,
   },
   error: {
-    color: "#f87171",
+    color: colors.danger,
     marginBottom: 12,
   },
   info: {
-    color: "#86efac",
+    color: colors.success,
     marginBottom: 12,
-  },
-  logoutBtn: {
-    backgroundColor: "#334155",
-    borderRadius: 10,
-    padding: 14,
-    alignItems: "center",
-    marginTop: 8,
-  },
-  logoutText: {
-    color: "#f8fafc",
-    fontWeight: "600",
   },
 });

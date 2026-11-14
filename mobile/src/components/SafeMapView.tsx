@@ -17,6 +17,7 @@ import {
   type ViewStyle,
 } from "react-native";
 import MapView, { type Region } from "react-native-maps";
+import { colors, radius } from "../theme";
 import {
   getMapProvider,
   MAP_LOAD_FAILED_MESSAGE,
@@ -169,7 +170,7 @@ const SafeMapView = forwardRef<MapView, SafeMapViewProps>(function SafeMapView(
       </MapView>
       {!mapReady && !showLoadFailed ? (
         <View style={styles.loadingOverlay} pointerEvents="none">
-          <ActivityIndicator color="#38bdf8" />
+          <ActivityIndicator color={colors.primary} />
         </View>
       ) : null}
       {showLoadFailed ? (
@@ -189,8 +190,10 @@ const styles = StyleSheet.create({
   wrap: {
     width: "100%",
     overflow: "hidden",
-    backgroundColor: "#1e293b",
-    borderRadius: 12,
+    backgroundColor: colors.surface,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   mapFill: {
     ...StyleSheet.absoluteFillObject,
@@ -199,17 +202,17 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "rgba(30,41,59,0.35)",
+    backgroundColor: colors.overlay,
   },
   failOverlay: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "rgba(15,23,42,0.75)",
+    backgroundColor: colors.modalScrim,
     padding: 16,
   },
   failText: {
-    color: "#fde68a",
+    color: colors.onFilled,
     textAlign: "center",
     lineHeight: 20,
   },

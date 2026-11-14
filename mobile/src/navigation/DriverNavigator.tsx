@@ -1,5 +1,6 @@
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import DriverHomeScreen from "../screens/driver/DriverHomeScreen";
+import { colors } from "../theme";
 
 export type DriverStackParamList = {
   DriverHome: undefined;
@@ -12,14 +13,19 @@ export default function DriverNavigator() {
   return (
     <Stack.Navigator
       screenOptions={{
-        headerStyle: { backgroundColor: "#0f172a" },
-        headerTintColor: "#f8fafc",
+        headerStyle: {
+          backgroundColor: colors.bgElev,
+        },
+        headerTintColor: colors.text,
+        headerTitleStyle: { fontWeight: "700" },
+        headerShadowVisible: false,
+        contentStyle: { backgroundColor: colors.bg },
       }}
     >
       <Stack.Screen
         name="DriverHome"
         component={DriverHomeScreen}
-        options={{ title: "Driver" }}
+        options={{ title: "Driver Ops" }}
       />
     </Stack.Navigator>
   );

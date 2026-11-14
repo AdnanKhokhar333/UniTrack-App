@@ -167,3 +167,36 @@ export type DeviceToken = {
   updated_at: string | null;
   created_at: string | null;
 };
+
+export type BusPass = {
+  student_number: string;
+  full_name: string;
+  route_name: string | null;
+  stop_name: string | null;
+  university: string | null;
+  valid_date: string;
+  token: string;
+  is_approved: boolean;
+  is_active: boolean;
+};
+
+export type DriverRating = {
+  id: number;
+  student_id: number;
+  driver_id: number;
+  trip_id: number | null;
+  stars: number;
+  comment: string | null;
+  created_at: string | null;
+};
+
+export type Complaint = {
+  id: number;
+  student_id: number;
+  driver_id: number | null;
+  trip_id: number | null;
+  subject: string;
+  body: string;
+  is_resolved: boolean;
+  created_at: string | null;
+};
